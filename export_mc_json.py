@@ -623,7 +623,7 @@ def save(operator, context, **kwargs):
                 % camera_obj.name)
             return {'CANCELLED'}
 
-    if export_armat:
+    if armature_obj is not None:
         try:
             armature_result = export_armature(
                 armature_obj, visible_bones, armature_fmt)
