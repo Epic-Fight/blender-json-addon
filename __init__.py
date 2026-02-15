@@ -45,7 +45,7 @@ class ExportToJson(bpy.types.Operator, ExportHelper):
     armature_format = EnumProperty(
         name="Armature Format",
         description="Armature transform export format",
-        default='MAT',
+        default='ATTR',
         items=transform_formats
     )
 
