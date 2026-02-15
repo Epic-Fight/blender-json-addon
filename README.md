@@ -16,6 +16,8 @@ Since this exporter is designed for a very restricted purpose, I won't provide a
 
 ## Changelog
 
+3.0.0: Fixed _ctypes / execstack error entirely, Added error warning messages to help new users understand errors, Made camera always expor as "Attributes", Added Animation/Armature Format selector.
+
 2.0.2: Added 'Export only visible bones' option applied to exporting armature and animation
 
 2.0.1: Fixed camera animation export error caused by quaternion <-> matrix transformation.
