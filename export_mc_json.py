@@ -99,8 +99,8 @@ def decompose_to_dict(matrix):
     return d
 
 
-def export_mesh(obj, bones):
-    obj_mesh = obj.to_mesh(bpy.context.scene, False,
+def export_mesh(obj, bones, apply_modifiers=False):
+    obj_mesh = obj.to_mesh(bpy.context.scene, apply_modifiers,
                            calc_tessface=False, settings='PREVIEW')
     triangulated_mesh = bpy.data.meshes.new('triangulated_mesh')
     mesh_triangulate(obj_mesh, triangulated_mesh)
@@ -559,6 +559,7 @@ def save(operator, context, **kwargs):
     export_armat    = kwargs.get('export_armature', True)
     export_anim     = kwargs.get('export_anim', True)
     export_cam      = kwargs.get('export_camera', False)
+    apply_mods      = kwargs.get('apply_modifiers', False)
     animation_fmt   = kwargs.get('animation_format', 'ATTR')
     armature_fmt    = kwargs.get('armature_format', 'MAT')
     visible_bones   = kwargs.get('export_only_visible_bones', False)
@@ -668,7 +669,8 @@ def save(operator, context, **kwargs):
                 mesh_result = export_mesh(
                     mesh_obj,
                     (armature_result['joints'].value
-                     if armature_result is not None else None))
+                     if armature_result is not None else None),
+                    apply_modifiers=apply_mods)
             except ExportError as e:
                 operator.report({'ERROR'}, str(e))
                 return {'CANCELLED'}
