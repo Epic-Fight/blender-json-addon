@@ -29,6 +29,13 @@ class ExportToJson(bpy.types.Operator, ExportHelper):
         default=True
     )
 
+    apply_modifiers: BoolProperty(
+        name="Apply Modifiers",
+        description="Apply modifiers before exporting. "
+                    "Make sure the armature is in rest pose if enabled",
+        default=False
+    )
+
     export_armature: BoolProperty(
         name="Export Armature",
         description="Export armature data",
@@ -77,6 +84,9 @@ class ExportToJson(bpy.types.Operator, ExportHelper):
         layout = self.layout
 
         layout.prop(self, "export_mesh")
+        if self.export_mesh:
+            box = layout.box()
+            box.prop(self, "apply_modifiers")
 
         layout.separator()
         layout.prop(self, "export_armature")

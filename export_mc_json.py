@@ -122,11 +122,25 @@ def get_group_name_from_fcurve(fcurve):
     return None
 
 
-def export_mesh(obj, bones):
-    try:
-        obj_mesh = obj.to_mesh(preserve_all_data_layers=True)
-    except TypeError:
-        obj_mesh = obj.to_mesh()
+def export_mesh(obj, bones, apply_modifiers=False):
+    # ── obtain the mesh, optionally with modifiers baked in ──
+    if apply_modifiers:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        obj_eval = obj.evaluated_get(depsgraph)
+        try:
+            obj_mesh = obj_eval.to_mesh(preserve_all_data_layers=True,
+                                        depsgraph=depsgraph)
+        except TypeError:
+            obj_mesh = obj_eval.to_mesh()
+    else:
+        try:
+            obj_mesh = obj.to_mesh(preserve_all_data_layers=True)
+        except TypeError:
+            obj_mesh = obj.to_mesh()
+
+    # ── vertex-group look-up must always go through the *original* object ──
+    # obj_eval (if used) may not carry the same vertex_groups reference,
+    # so every vg access below keeps using `obj`.
 
     original_poly_verts = [list(p.vertices) for p in obj_mesh.polygons]
 
@@ -221,7 +235,8 @@ def export_mesh(obj, bones):
 
         for vi, v, li in f_v:
             mesh_vgs = [obj.vertex_groups[vg.group].name
-                        for vg in v.groups]
+                        for vg in v.groups
+                        if vg.group < len(obj.vertex_groups)]
             mesh_vgs = list(filter(lambda x: x[-5:] == "_mesh", mesh_vgs))
 
             if len(mesh_vgs) == 0:
@@ -243,7 +258,8 @@ def export_mesh(obj, bones):
                 vg_names = [
                     [obj.vertex_groups[vg.group].name[:-5]
                      for vg in v.groups
-                     if obj.vertex_groups[vg.group].name[-5:] == '_mesh']
+                     if (vg.group < len(obj.vertex_groups)
+                         and obj.vertex_groups[vg.group].name[-5:] == '_mesh')]
                     for v in [obj_mesh.vertices[vid]
                               for vid in orig_verts]
                 ]
@@ -313,6 +329,12 @@ def export_mesh(obj, bones):
     for k, v in parts.items():
         if len(v) > 0:
             output['parts'][k] = create_array_dict(3, len(v) // 3, v)
+
+    # ── clean up the temporary mesh ──
+    if apply_modifiers:
+        obj_eval.to_mesh_clear()
+    else:
+        obj.to_mesh_clear()
 
     return output
 
@@ -574,6 +596,7 @@ def save(operator, context, **kwargs):
     export_armat = kwargs.get('export_armature', True)
     export_anim = kwargs.get('export_anim', True)
     export_cam = kwargs.get('export_camera', False)
+    apply_mods = kwargs.get('apply_modifiers', False)
     animation_fmt = kwargs.get('animation_format', 'ATTR')
     armature_fmt = kwargs.get('armature_format', 'MAT')
     visible_bones = kwargs.get('export_only_visible_bones', False)
@@ -683,7 +706,8 @@ def save(operator, context, **kwargs):
                 mesh_result = export_mesh(
                     mesh_obj,
                     (armature_result['joints'].value
-                     if armature_result is not None else None))
+                     if armature_result is not None else None),
+                    apply_modifiers=apply_mods)
             except ExportError as e:
                 operator.report({'ERROR'}, str(e))
                 return {'CANCELLED'}
