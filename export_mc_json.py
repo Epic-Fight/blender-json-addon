@@ -224,8 +224,12 @@ def export_mesh(obj, bones):
                     for v in [obj_mesh.vertices[vid]
                               for vid in owner_polygons[f].vertices]
                 ]
-                if all(part_name in names for names in vg_names):
-                    parts[part_name].extend(i_list)
+                if part_name == 'noGroups':
+                    if all(len(names) == 0 for names in vg_names):
+                        parts[part_name].extend(i_list)
+                else:
+                    if all(part_name in names for names in vg_names):
+                        parts[part_name].extend(i_list)
 
     output = OrderedDict()
     output['positions'] = create_array_dict(
