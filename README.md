@@ -1,4 +1,4 @@
----
+***
 
 # Epic Fight Animation & Model Exporter
 
@@ -6,7 +6,7 @@ A dedicated **Blender 2.79** exporter built specifically for **Epic Fight–base
 
 This add-on enables exporting meshes, armatures, animations, and camera data into a structured JSON format compatible with Epic Fight workflows.
 
----
+***
 
 ## 📦 Installation (Blender 2.79)
 
@@ -34,7 +34,7 @@ This add-on enables exporting meshes, armatures, animations, and camera data int
 
 8. Click **Save User Settings**.
 
----
+***
 
 ## ⚠️ Requirements & Limitations
 
@@ -51,7 +51,7 @@ be it by consulting the community or browsing our issue tracker.
 Also ensure your data structure matches the expected workflow before reporting issues.
 For more information on how to use this and use Blender for Epic Fight development, check our [wiki](https://epicfight-docs.readthedocs.io).
 
----
+***
 
 ## 📝 Changelog
 
@@ -93,4 +93,4 @@ For more information on how to use this and use Blender for Epic Fight developme
 
 * Initial release
 
----
+***
