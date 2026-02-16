@@ -1,25 +1,95 @@
-# Epic Fight Animation & Model exporter
+---
 
-This plugin is specially created for Minecraft - Epic Fight development, in blender 2.79 version.
+# Epic Fight Animation & Model Exporter
 
-## Applying to your blender
+A dedicated **Blender 2.8+** exporter built specifically for **Epic Fight–based Minecraft development**.
 
-1. Download the whole source code.
-2. Go to the folder where blender is installed, move all files under /2.79/scripts/addons/io_export_mc_json/. (Last folder name is example)
-3. Go to the Blender > File > User Preferences > Add-ons, And find the add-on named "Import-Export: Minecraft Model Json Exporter"
-4. Check to the checkbox and save user settings
-5. Now you can see the exporter named "Animated Minecraft Model" is activated!
+This version of the exporter, supports **all versions above Blender 2.8**. The exporter itself was tested on the following versions:
+* Blender [2.8] 🟩 Fully tested & working
+* Blender [3.6] 🟩 Fully tested & working
+* Blender [4.1] 🟩 Fully tested & working
+* Blender [5.0] 🟩 Fully tested & working
 
-## About the bug and supports
+This add-on enables exporting meshes, armatures, animations, and camera data into a structured JSON format compatible with Epic Fight workflows.
 
-Since this exporter is designed for a very restricted purpose, I won't provide any support. The mesh, armature, and animation data must be created first to export the model properly.
+---
 
-## Changelog
+## 📦 Installation (Blender 2.8+)
 
-1.0.3 - Ported it to Blender 3.6 (Credits: [@box-777](https://github.com/box-777))<br>  
-1.0.2: Added the part ditingushing function by the vertex group it will store all vectices in the vertex group which is the name ends with "_mesh"<br>  
-1.0.1: Separated the option "export model" to "export mesh" and "export armature". This is because the armature data is useless to armors. Changed the hidden joints not to be exported.<br>  
-1.0.0: Created<br>  
+1. Download or clone the full source code.
 
-## Credits
-box7805 - Blender 3.6 exporter
+2. Navigate to your Blender installation directory.
+
+3. Move the add-on folder to:
+
+   ```
+   /<blender-version>/scripts/addons/<export-here>
+   ```
+
+4. Open Blender.
+
+5. Go to **File → User Preferences → Add-ons**.
+
+6. Search for:
+
+   ```
+   Import-Export: Minecraft Model Json Exporter
+   ```
+
+7. Enable the checkbox.
+
+8. Click **Save User Settings**.
+
+---
+
+## ⚠️ Requirements & Limitations
+
+This exporter is designed for a **very specific pipeline**.
+
+Before exporting, ensure:
+
+* Mesh is properly structured
+* Armature is correctly configured
+* Animations are fully created and validated
+
+Before reporting issues, please make sure to seek other methods of support, 
+be it by consulting the community or browsing our issue tracker.
+Also ensure your data structure matches the expected workflow before reporting issues.
+For more information on how to use this and use Blender for Epic Fight development, check our [wiki](https://epicfight-docs.readthedocs.io).
+
+---
+
+## 📝 Changelog
+
+### 2.0.0
+
+* Ported 3.0.0 to Blender 2.8+
+  * Fixed Several issues
+  * Improved the exporter to work on versions above 3.6
+  * Added support for camera export & 'Attributes' exporting format
+
+### 1.0.3
+
+* Ported it to Blender 3.6 (Credits: [@box](https://github.com/box777555888))<br>  
+
+### 1.0.2
+
+* Added mesh separation by vertex groups
+  (Groups ending with `_mesh` are exported as distinct parts)
+
+### 1.0.1
+
+* Split "Export Model" into:
+
+  * Export Mesh
+  * Export Armature
+* Hidden joints are no longer exported
+
+### 1.0.0
+
+* Initial release for Blender 2.8
+
+---
+
+## 👥 Credits
+[@box](https://github.com/box777555888) - Blender 3.6 exporter
