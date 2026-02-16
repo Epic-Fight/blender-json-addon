@@ -123,7 +123,6 @@ def get_group_name_from_fcurve(fcurve):
 
 
 def export_mesh(obj, bones, apply_modifiers=False):
-    # ── obtain the mesh, optionally with modifiers baked in ──
     if apply_modifiers:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         obj_eval = obj.evaluated_get(depsgraph)
@@ -137,10 +136,6 @@ def export_mesh(obj, bones, apply_modifiers=False):
             obj_mesh = obj.to_mesh(preserve_all_data_layers=True)
         except TypeError:
             obj_mesh = obj.to_mesh()
-
-    # ── vertex-group look-up must always go through the *original* object ──
-    # obj_eval (if used) may not carry the same vertex_groups reference,
-    # so every vg access below keeps using `obj`.
 
     original_poly_verts = [list(p.vertices) for p in obj_mesh.polygons]
 
@@ -330,7 +325,6 @@ def export_mesh(obj, bones, apply_modifiers=False):
         if len(v) > 0:
             output['parts'][k] = create_array_dict(3, len(v) // 3, v)
 
-    # ── clean up the temporary mesh ──
     if apply_modifiers:
         obj_eval.to_mesh_clear()
     else:
