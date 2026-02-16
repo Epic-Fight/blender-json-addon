@@ -2,22 +2,30 @@ from collections import OrderedDict
 import json
 import re
 import traceback
-import math
 
+import bmesh
 import bpy
+import math
 import mathutils
 
-
 class ExportError(Exception):
+    """Raised when the export hits something the user can fix."""
     pass
 
-
 class NoIndent(object):
+    """Wrap a value so NoIndentEncoder serialises it on a single line."""
     def __init__(self, value):
         self.value = value
 
 
 class NoIndentEncoder(json.JSONEncoder):
+    """
+    Compact encoder that keeps *NoIndent*-wrapped values on one line
+    while pretty-printing everything else.
+
+    Uses an in-memory dict instead of ``_ctypes.PyObj_FromPtr`` so it
+    works on every platform without needing ``execstack``.
+    """
     FORMAT_SPEC = '@@{}@@'
     regex = re.compile(FORMAT_SPEC.format(r'(\d+)'))
 
@@ -29,7 +37,7 @@ class NoIndentEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, NoIndent):
             key = id(obj)
-            self._no_indent_objects[key] = obj
+            self._no_indent_objects[key] = obj          # prevent GC
             return self.FORMAT_SPEC.format(key)
         return super(NoIndentEncoder, self).default(obj)
 
@@ -47,19 +55,17 @@ class NoIndentEncoder(json.JSONEncoder):
                     '"{}"'.format(format_spec.format(key)), json_obj_repr)
         return json_repr
 
-
 def ensure_extension(filepath, extension):
     if not filepath.lower().endswith(extension):
         filepath += extension
     return filepath
 
 
-def mesh_triangulate(me):
-    import bmesh
+def mesh_triangulate(src, dest):
     bm = bmesh.new()
-    bm.from_mesh(me)
+    bm.from_mesh(src)
     bmesh.ops.triangulate(bm, faces=bm.faces)
-    bm.to_mesh(me)
+    bm.to_mesh(dest)
     bm.free()
 
 
@@ -84,6 +90,7 @@ def create_array_dict(stride, count, array):
 
 
 def decompose_to_dict(matrix):
+    """Decompose *matrix* into loc / rot / sca and return an OrderedDict."""
     loc, rot, sca = matrix.decompose()
     d = OrderedDict()
     d['loc'] = NoIndent([round(v, 6) for v in loc])
@@ -92,85 +99,36 @@ def decompose_to_dict(matrix):
     return d
 
 
-def get_fcurves_from_action(action):
-    if hasattr(action, 'fcurves') and len(action.fcurves) > 0:
-        return list(action.fcurves)
-
-    fcurves = []
-    if hasattr(action, 'layers'):
-        for layer in action.layers:
-            for strip in layer.strips:
-                if hasattr(strip, 'channelbags'):
-                    for channelbag in strip.channelbags:
-                        fcurves.extend(channelbag.fcurves)
-    return fcurves
-
-
-def get_bone_name_from_fcurve(fcurve):
-    if hasattr(fcurve, 'group') and fcurve.group is not None:
-        return fcurve.group.name
-
-    match = re.match(r'pose\.bones\["(.+?)"\]', fcurve.data_path)
-    if match:
-        return match.group(1)
-    return None
-
-
-def get_group_name_from_fcurve(fcurve):
-    if hasattr(fcurve, 'group') and fcurve.group is not None:
-        return fcurve.group.name
-    return None
-
-
 def export_mesh(obj, bones, apply_modifiers=False):
-    # ── obtain the mesh, optionally with modifiers baked in ──
-    if apply_modifiers:
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        obj_eval = obj.evaluated_get(depsgraph)
-        try:
-            obj_mesh = obj_eval.to_mesh(preserve_all_data_layers=True,
-                                        depsgraph=depsgraph)
-        except TypeError:
-            obj_mesh = obj_eval.to_mesh()
-    else:
-        try:
-            obj_mesh = obj.to_mesh(preserve_all_data_layers=True)
-        except TypeError:
-            obj_mesh = obj.to_mesh()
+    obj_mesh = obj.to_mesh(bpy.context.scene, apply_modifiers,
+                           calc_tessface=False, settings='PREVIEW')
+    triangulated_mesh = bpy.data.meshes.new('triangulated_mesh')
+    mesh_triangulate(obj_mesh, triangulated_mesh)
+    triangulated_mesh.calc_normals_split()
 
-    # ── vertex-group look-up must always go through the *original* object ──
-    # obj_eval (if used) may not carry the same vertex_groups reference,
-    # so every vg access below keeps using `obj`.
+    owner_polygons = {}
 
-    original_poly_verts = [list(p.vertices) for p in obj_mesh.polygons]
-
-    mesh_triangulate(obj_mesh)
-
-    if hasattr(obj_mesh, 'calc_normals_split'):
-        obj_mesh.calc_normals_split()
-
-    owner_polygon_indices = {}
-    for f in obj_mesh.polygons:
-        tri_verts = set(f.vertices)
-        owners = [i for i, orig_verts in enumerate(original_poly_verts)
-                  if tri_verts.issubset(set(orig_verts))]
+    for f in triangulated_mesh.polygons:
+        owners = [p for p in obj_mesh.polygons
+                  if all(x in list(p.vertices) for x in list(f.vertices))]
 
         if len(owners) != 1:
             raise ExportError(
                 "Triangulation error: a triangulated face could not be "
-                "matched to exactly one original polygon. "
+                "matched to exactly one original polygon.  "
                 "Check the mesh '%s' for overlapping or degenerate faces."
-                % obj.name)
+                % obj.name
+            )
 
-        owner_polygon_indices[f.index] = owners[0]
+        owner_polygons[f] = owners[0]
 
     position_array = [round(pos, 6)
-                      for v in obj_mesh.vertices
+                      for v in triangulated_mesh.vertices
                       for pos in v.co[:]]
 
     uv_array = []
     normal_array = []
-    loops = obj_mesh.loops
+    loops = triangulated_mesh.loops
     uv_unique_count = no_unique_count = 0
 
     no_key = no_val = None
@@ -178,65 +136,71 @@ def export_mesh(obj, bones, apply_modifiers=False):
     no_get = normals_to_idx.get
     loops_to_normals = [0] * len(loops)
 
-    for f in obj_mesh.polygons:
+    for f in triangulated_mesh.polygons:
         for l_idx in f.loop_indices:
             no_key = veckey3d(loops[l_idx].normal)
             no_val = no_get(no_key)
+
             if no_val is None:
                 no_val = normals_to_idx[no_key] = no_unique_count
                 for n_val in no_key:
                     normal_array.append(n_val)
                 no_unique_count += 1
+
             loops_to_normals[l_idx] = no_val
 
     del normals_to_idx, no_get, no_key, no_val
 
-    uv_layer_active = obj_mesh.uv_layers.active
+    uv_layer_active = triangulated_mesh.uv_layers.active
     if uv_layer_active is None:
         raise ExportError(
-            "Mesh '%s' has no active UV layer. "
-            "Unwrap the mesh before exporting." % obj.name)
+            "Mesh '%s' has no active UV layer.  "
+            "Unwrap the mesh before exporting." % obj.name
+        )
     uv_layer = uv_layer_active.data[:]
 
     uv = f_index = uv_index = uv_key = uv_val = uv_ls = None
-    uv_face_mapping = [None] * len(obj_mesh.polygons)
+    uv_face_mapping = [None] * len(triangulated_mesh.polygons)
     uv_dict = {}
     uv_get = uv_dict.get
 
-    for f_index, f in enumerate(obj_mesh.polygons):
+    for f_index, f in enumerate(triangulated_mesh.polygons):
         uv_ls = uv_face_mapping[f_index] = []
+
         for uv_index, l_index in enumerate(f.loop_indices):
             uv = uv_layer[l_index].uv
             uv_key = veckey2d(uv)
             uv_val = uv_get(uv_key)
+
             if uv_val is None:
                 uv_val = uv_dict[uv_key] = uv_unique_count
                 for i, uv_cor in enumerate(uv):
                     uv_array.append(
                         round(uv_cor if i % 2 == 0 else 1 - uv_cor, 6))
                 uv_unique_count += 1
+
             uv_ls.append(uv_val)
 
     del uv_dict, uv, f_index, uv_index, uv_ls, uv_get, uv_key, uv_val
 
     parts = {'noGroups': []}
+
     for vg in obj.vertex_groups:
         if vg.name[-5:] == "_mesh":
             parts[vg.name[:-5]] = []
 
-    for f_index, f in enumerate(obj_mesh.polygons):
-        f_v = [(vi, obj_mesh.vertices[v_idx], l_idx)
+    for f_index, f in enumerate(triangulated_mesh.polygons):
+        f_v = [(vi, triangulated_mesh.vertices[v_idx], l_idx)
                for vi, (v_idx, l_idx)
                in enumerate(zip(f.vertices, f.loop_indices))]
 
-        polygons_part_indices = {}
+        polygons_part_indices = {'noGroups': []}
         for name in parts.keys():
             polygons_part_indices[name] = []
 
         for vi, v, li in f_v:
             mesh_vgs = [obj.vertex_groups[vg.group].name
-                        for vg in v.groups
-                        if vg.group < len(obj.vertex_groups)]
+                        for vg in v.groups]
             mesh_vgs = list(filter(lambda x: x[-5:] == "_mesh", mesh_vgs))
 
             if len(mesh_vgs) == 0:
@@ -253,15 +217,12 @@ def export_mesh(obj, bones, apply_modifiers=False):
 
         for part_name, i_list in polygons_part_indices.items():
             if len(i_list) // 3 == len(f.vertices):
-                orig_idx = owner_polygon_indices[f.index]
-                orig_verts = original_poly_verts[orig_idx]
                 vg_names = [
                     [obj.vertex_groups[vg.group].name[:-5]
                      for vg in v.groups
-                     if (vg.group < len(obj.vertex_groups)
-                         and obj.vertex_groups[vg.group].name[-5:] == '_mesh')]
+                     if obj.vertex_groups[vg.group].name[-5:] == '_mesh']
                     for v in [obj_mesh.vertices[vid]
-                              for vid in orig_verts]
+                              for vid in owner_polygons[f].vertices]
                 ]
                 if part_name == 'noGroups':
                     if all(len(names) == 0 for names in vg_names):
@@ -283,7 +244,7 @@ def export_mesh(obj, bones, apply_modifiers=False):
         weights = []
         vindices = []
 
-        for v in obj_mesh.vertices:
+        for v in triangulated_mesh.vertices:
             vc_val = 0
             appended_joints = []
             weight_list = []
@@ -330,12 +291,6 @@ def export_mesh(obj, bones, apply_modifiers=False):
         if len(v) > 0:
             output['parts'][k] = create_array_dict(3, len(v) // 3, v)
 
-    # ── clean up the temporary mesh ──
-    if apply_modifiers:
-        obj_eval.to_mesh_clear()
-    else:
-        obj.to_mesh_clear()
-
     return output
 
 
@@ -350,7 +305,7 @@ def export_armature(obj, export_visible_bones, armature_format='MAT'):
         matrix = b.matrix_local
 
         if b.parent is not None:
-            matrix = b.parent.matrix_local.inverted_safe() @ matrix
+            matrix = b.parent.matrix_local.inverted_safe() * matrix
 
         bone_dict['name'] = b.name
 
@@ -383,9 +338,10 @@ def export_armature(obj, export_visible_bones, armature_format='MAT'):
 
     if not bones:
         raise ExportError(
-            "Armature '%s' produced no exportable bones. "
+            "Armature '%s' produced no exportable bones.  "
             "If 'Export Only Visible Bones' is checked, make sure at "
-            "least some bones are visible." % obj.name)
+            "least some bones are visible." % obj.name
+        )
 
     output['joints'] = NoIndent(bones)
     output['hierarchy'] = bone_hierarchy
@@ -398,42 +354,46 @@ def export_animation(obj, bone_name_list, animation_format):
 
     if obj.animation_data is None:
         raise ExportError(
-            "Armature '%s' has no animation data. "
-            "Create an action or uncheck 'Export Animation'." % obj.name)
+            "Armature '%s' has no animation data.  "
+            "Create an action or uncheck 'Export Animation'." % obj.name
+        )
 
     action = obj.animation_data.action
 
     if action is None:
         raise ExportError(
-            "Armature '%s' has no active action. "
-            "Assign an action or uncheck 'Export Animation'." % obj.name)
+            "Armature '%s' has no active action.  "
+            "Assign an action or uncheck 'Export Animation'." % obj.name
+        )
 
     bones = obj.data.bones
     dope_sheet = {}
     timelines = []
     output = []
 
-    fcurves = get_fcurves_from_action(action)
+    for curve in action.fcurves:
+        if curve.group is None:
+            continue                               # skip un-grouped fcurves
 
-    for curve in fcurves:
-        name = get_bone_name_from_fcurve(curve)
-        if name is None:
-            continue
+        name = curve.group.name
 
         if name not in dope_sheet:
             dope_sheet[name] = {'transform': [], 'timestamp': []}
 
         for keyframe in curve.keyframe_points:
             val = int(keyframe.co[0])
+
             if val not in dope_sheet[name]['timestamp']:
                 dope_sheet[name]['timestamp'].append(val)
+
             if val not in timelines:
                 timelines.append(val)
 
     if not timelines:
         raise ExportError(
             "Action '%s' on armature '%s' contains no keyframes."
-            % (action.name, obj.name))
+            % (action.name, obj.name)
+        )
 
     timelines.sort()
 
@@ -454,14 +414,14 @@ def export_animation(obj, bone_name_list, animation_format):
                 if animation_format == 'ATTR':
                     if b.parent is not None:
                         bone_local = (b.parent.matrix_local.inverted_safe()
-                                      @ bone_local)
+                                      * bone_local)
                         parent_pose_inv = (
                             obj.pose.bones[b.parent.name]
                                .matrix.inverted_safe())
                         matrix = (bone_local.inverted_safe()
-                                  @ parent_pose_inv @ matrix)
+                                  * parent_pose_inv * matrix)
                     else:
-                        matrix = bone_local.inverted_safe() @ matrix
+                        matrix = bone_local.inverted_safe() * matrix
 
                     if t not in dope_sheet[b.name]['timestamp']:
                         dope_sheet[b.name]['timestamp'].append(t)
@@ -473,7 +433,7 @@ def export_animation(obj, bone_name_list, animation_format):
                         parent_pose_inv = (
                             obj.pose.bones[b.parent.name]
                                .matrix.inverted_safe())
-                        matrix = parent_pose_inv @ matrix
+                        matrix = parent_pose_inv * matrix
 
                     if t not in dope_sheet[b.name]['timestamp']:
                         dope_sheet[b.name]['timestamp'].append(t)
@@ -501,43 +461,41 @@ def export_camera(camera_obj):
 
     if camera_obj.animation_data is None:
         raise ExportError(
-            "Camera '%s' has no animation data. "
+            "Camera '%s' has no animation data.  "
             "Add keyframes to the camera or uncheck 'Export Camera'."
-            % camera_obj.name)
+            % camera_obj.name
+        )
 
     action = camera_obj.animation_data.action
 
     if action is None:
         raise ExportError(
-            "Camera '%s' has no active action. "
+            "Camera '%s' has no active action.  "
             "Assign an action or uncheck 'Export Camera'."
-            % camera_obj.name)
+            % camera_obj.name
+        )
 
     transform = []
     timestamp = []
 
-    fcurves = get_fcurves_from_action(action)
-
     kf_names = set()
-    has_groups = False
-    for fcurve in fcurves:
-        name = get_group_name_from_fcurve(fcurve)
-        if name is not None:
-            has_groups = True
-            kf_names.add(name)
+    for fcurve in action.fcurves:
+        if fcurve.group is not None:
+            kf_names.add(fcurve.group.name)
 
-    if has_groups and len(kf_names) != 1:
+    if len(kf_names) != 1:
         raise ExportError(
             "Camera action '%s' has %d keyframe group(s) (%s), "
-            "but exactly 1 is expected. "
+            "but exactly 1 is expected.  "
             "Make sure all camera F-Curves belong to a single group "
             "(select all keyframes in the Dope Sheet and press Ctrl+G "
             "to assign them to one group)."
             % (action.name,
                len(kf_names),
-               ', '.join(kf_names) if kf_names else '<none>'))
+               ', '.join(kf_names) if kf_names else '<none>')
+        )
 
-    for curve in fcurves:
+    for curve in action.fcurves:
         for keyframe in curve.keyframe_points:
             val = int(keyframe.co[0])
             if val not in timestamp:
@@ -548,13 +506,14 @@ def export_camera(camera_obj):
     if not timestamp:
         raise ExportError(
             "Camera '%s' action '%s' contains no keyframes."
-            % (camera_obj.name, action.name))
+            % (camera_obj.name, action.name)
+        )
 
     for t in timestamp:
         scene.frame_set(t)
         world_mat = (mathutils.Matrix.Translation(
                          mathutils.Vector((0.0, 0.0, -1.62)))
-                     @ camera_obj.matrix_world)
+                     * camera_obj.matrix_world)
 
         loc, rot, sca = world_mat.decompose()
         blender_to_mc = mathutils.Quaternion(
@@ -586,20 +545,24 @@ def correct_bones_as_vertex_groups(obj, bones):
 
 
 def save(operator, context, **kwargs):
+    """
+    *operator* is the calling ``ExportToJson`` instance so we can
+    call ``operator.report()`` to show messages in the Blender UI.
+    """
     file_path = ensure_extension(kwargs['filepath'], ".json")
     output = OrderedDict()
 
     mesh_obj = armature_obj = camera_obj = None
     mesh_result = armature_result = animation_result = camera_result = None
 
-    export_msh = kwargs.get('export_mesh', True)
-    export_armat = kwargs.get('export_armature', True)
-    export_anim = kwargs.get('export_anim', True)
-    export_cam = kwargs.get('export_camera', False)
-    apply_mods = kwargs.get('apply_modifiers', False)
-    animation_fmt = kwargs.get('animation_format', 'ATTR')
-    armature_fmt = kwargs.get('armature_format', 'MAT')
-    visible_bones = kwargs.get('export_only_visible_bones', False)
+    export_msh      = kwargs.get('export_mesh', True)
+    export_armat    = kwargs.get('export_armature', True)
+    export_anim     = kwargs.get('export_anim', True)
+    export_cam      = kwargs.get('export_camera', False)
+    apply_mods      = kwargs.get('apply_modifiers', False)
+    animation_fmt   = kwargs.get('animation_format', 'ATTR')
+    armature_fmt    = kwargs.get('armature_format', 'MAT')
+    visible_bones   = kwargs.get('export_only_visible_bones', False)
 
     for obj in context.scene.objects:
         if obj.type == 'MESH' and mesh_obj is None:
@@ -612,20 +575,20 @@ def save(operator, context, **kwargs):
     if export_msh and mesh_obj is None:
         operator.report(
             {'WARNING'},
-            "No mesh object found in the scene. Mesh export skipped.")
+            "No mesh object found in the scene.  Mesh export skipped.")
         export_msh = False
 
     if armature_obj is None:
         if export_armat:
             operator.report(
                 {'WARNING'},
-                "No armature object found in the scene. "
+                "No armature object found in the scene.  "
                 "Armature export skipped.")
             export_armat = False
         if export_anim:
             operator.report(
                 {'WARNING'},
-                "No armature object found in the scene. "
+                "No armature object found in the scene.  "
                 "Animation export skipped.")
             export_anim = False
     else:
@@ -633,13 +596,13 @@ def save(operator, context, **kwargs):
             if armature_obj.animation_data is None:
                 operator.report(
                     {'WARNING'},
-                    "Armature '%s' has no animation data. "
+                    "Armature '%s' has no animation data.  "
                     "Animation export skipped." % armature_obj.name)
                 export_anim = False
             elif armature_obj.animation_data.action is None:
                 operator.report(
                     {'WARNING'},
-                    "Armature '%s' has no active action. "
+                    "Armature '%s' has no active action.  "
                     "Animation export skipped." % armature_obj.name)
                 export_anim = False
 
@@ -647,20 +610,20 @@ def save(operator, context, **kwargs):
         if camera_obj is None:
             operator.report(
                 {'ERROR'},
-                "No camera object found in the scene. "
+                "No camera object found in the scene.  "
                 "Add a camera or uncheck 'Export Camera'.")
             return {'CANCELLED'}
         if camera_obj.animation_data is None:
             operator.report(
                 {'ERROR'},
-                "Camera '%s' has no animation data. "
+                "Camera '%s' has no animation data.  "
                 "Add keyframes to the camera or uncheck 'Export Camera'."
                 % camera_obj.name)
             return {'CANCELLED'}
         if camera_obj.animation_data.action is None:
             operator.report(
                 {'ERROR'},
-                "Camera '%s' has no active action. "
+                "Camera '%s' has no active action.  "
                 "Assign an action or uncheck 'Export Camera'."
                 % camera_obj.name)
             return {'CANCELLED'}
@@ -750,7 +713,7 @@ def save(operator, context, **kwargs):
     if not output:
         operator.report(
             {'WARNING'},
-            "Nothing to export. Enable at least one export option and "
+            "Nothing to export.  Enable at least one export option and "
             "make sure the required objects exist in the scene.")
         return {'CANCELLED'}
 
