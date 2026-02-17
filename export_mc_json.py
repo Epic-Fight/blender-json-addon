@@ -122,6 +122,16 @@ def get_group_name_from_fcurve(fcurve):
     return None
 
 
+def _find_deform_parent(bone):
+    """Walk up the parent chain to find the nearest use_deform ancestor."""
+    parent = bone.parent
+    while parent is not None:
+        if parent.use_deform:
+            return parent
+        parent = parent.parent
+    return None
+
+
 def export_mesh(obj, bones, apply_modifiers=False):
     if apply_modifiers:
         depsgraph = bpy.context.evaluated_depsgraph_get()
@@ -137,6 +147,7 @@ def export_mesh(obj, bones, apply_modifiers=False):
         except TypeError:
             obj_mesh = obj.to_mesh()
 
+    # Vertex-group lookup must go through the original object
     original_poly_verts = [list(p.vertices) for p in obj_mesh.polygons]
 
     mesh_triangulate(obj_mesh)
@@ -274,6 +285,8 @@ def export_mesh(obj, bones, apply_modifiers=False):
         3, len(normal_array) // 3, normal_array)
 
     if bones is not None:
+        bones_set = set(bones)
+
         vcounts = []
         weights = []
         vindices = []
@@ -291,7 +304,8 @@ def export_mesh(obj, bones, apply_modifiers=False):
                 name = obj.vertex_groups[vg.group].name
                 if (w_val > 0.0
                         and name not in appended_joints
-                        and name[-5:] != "_mesh"):
+                        and name[-5:] != "_mesh"
+                        and name in bones_set):
                     appended_joints.append(name)
                     weight_total += w_val
                     weight_list.append((name, w_val))
@@ -299,8 +313,8 @@ def export_mesh(obj, bones, apply_modifiers=False):
             if weight_total == 0.0:
                 weight_total += 1.0
                 weight_list.append(('Root', 1.0))
-                print("WARNING  Vertex %d in mesh '%s' is not assigned "
-                      "to any bone group - defaulting to 'Root'."
+                print("WARNING  Vertex %d in mesh '%s' has no weights to "
+                      "any deform bone - defaulting to 'Root'."
                       % (v.index, obj.name))
 
             normalization = 1.0 / weight_total
@@ -334,17 +348,35 @@ def export_mesh(obj, bones, apply_modifiers=False):
 
 
 def export_armature(obj, export_visible_bones, armature_format='MAT'):
+    skipped_bones = []
 
     def export_bones(b, bone_list, bone_dict,
                      export_visible_bones, armature_format):
         if export_visible_bones and b.hide:
             return None
 
-        bone_list.append(b.name)
-        matrix = b.matrix_local
+        # Skip non-deform bones but recurse into children so
+        # deform bones parented under control bones are kept
+        if not b.use_deform:
+            skipped_bones.append(b.name)
+            promoted = []
+            for child in b.children:
+                result = export_bones(child, bone_list, OrderedDict(),
+                                      export_visible_bones, armature_format)
+                if result is not None:
+                    if isinstance(result, list):
+                        promoted.extend(result)
+                    else:
+                        promoted.append(result)
+            return promoted if promoted else None
 
-        if b.parent is not None:
-            matrix = b.parent.matrix_local.inverted_safe() @ matrix
+        bone_list.append(b.name)
+
+        # Transform relative to nearest deform ancestor
+        matrix = b.matrix_local
+        deform_parent = _find_deform_parent(b)
+        if deform_parent is not None:
+            matrix = deform_parent.matrix_local.inverted_safe() @ matrix
 
         bone_dict['name'] = b.name
 
@@ -358,7 +390,10 @@ def export_armature(obj, export_visible_bones, armature_format='MAT'):
             result = export_bones(child, bone_list, OrderedDict(),
                                   export_visible_bones, armature_format)
             if result is not None:
-                children.append(result)
+                if isinstance(result, list):
+                    children.extend(result)
+                else:
+                    children.append(result)
         bone_dict['children'] = children
 
         return bone_dict
@@ -370,16 +405,25 @@ def export_armature(obj, export_visible_bones, armature_format='MAT'):
     for b in obj.data.bones:
         if b.parent is not None:
             continue
-        b_dic = export_bones(b, bones, OrderedDict(),
-                             export_visible_bones, armature_format)
-        if b_dic is not None:
-            bone_hierarchy.append(b_dic)
+        result = export_bones(b, bones, OrderedDict(),
+                              export_visible_bones, armature_format)
+        if result is not None:
+            if isinstance(result, list):
+                bone_hierarchy.extend(result)
+            else:
+                bone_hierarchy.append(result)
+
+    if skipped_bones:
+        print("INFO  Skipped %d non-deform bone(s): %s"
+              % (len(skipped_bones), ', '.join(skipped_bones)))
 
     if not bones:
         raise ExportError(
             "Armature '%s' produced no exportable bones. "
             "If 'Export Only Visible Bones' is checked, make sure at "
-            "least some bones are visible." % obj.name)
+            "least some bones are visible. Also ensure your deform "
+            "bones have 'Deform' enabled in Bone Properties."
+            % obj.name)
 
     output['joints'] = NoIndent(bones)
     output['hierarchy'] = bone_hierarchy
@@ -403,6 +447,8 @@ def export_animation(obj, bone_name_list, animation_format):
             "Assign an action or uncheck 'Export Animation'." % obj.name)
 
     bones = obj.data.bones
+    deform_bone_names = set(bone_name_list)
+
     dope_sheet = {}
     timelines = []
     output = []
@@ -412,6 +458,9 @@ def export_animation(obj, bone_name_list, animation_format):
     for curve in fcurves:
         name = get_bone_name_from_fcurve(curve)
         if name is None:
+            continue
+
+        if name not in deform_bone_names:
             continue
 
         if name not in dope_sheet:
@@ -426,7 +475,9 @@ def export_animation(obj, bone_name_list, animation_format):
 
     if not timelines:
         raise ExportError(
-            "Action '%s' on armature '%s' contains no keyframes."
+            "Action '%s' on armature '%s' contains no keyframes "
+            "for deform bones. Make sure your deform bones have "
+            "keyframes, or uncheck 'Export Animation'."
             % (action.name, obj.name))
 
     timelines.sort()
@@ -435,6 +486,9 @@ def export_animation(obj, bone_name_list, animation_format):
         scene.frame_set(t)
 
         for b in bones:
+            if not b.use_deform:
+                continue
+
             if b.name not in dope_sheet:
                 dope_sheet[b.name] = {'transform': [], 'timestamp': []}
 
@@ -446,11 +500,12 @@ def export_animation(obj, bone_name_list, animation_format):
                 bone_local = b.matrix_local.copy()
 
                 if animation_format == 'ATTR':
-                    if b.parent is not None:
-                        bone_local = (b.parent.matrix_local.inverted_safe()
-                                      @ bone_local)
+                    deform_parent = _find_deform_parent(b)
+                    if deform_parent is not None:
+                        bone_local = (deform_parent.matrix_local
+                                      .inverted_safe() @ bone_local)
                         parent_pose_inv = (
-                            obj.pose.bones[b.parent.name]
+                            obj.pose.bones[deform_parent.name]
                                .matrix.inverted_safe())
                         matrix = (bone_local.inverted_safe()
                                   @ parent_pose_inv @ matrix)
@@ -463,9 +518,10 @@ def export_animation(obj, bone_name_list, animation_format):
                     dope_sheet[b.name]['transform'].append(
                         decompose_to_dict(matrix))
                 else:
-                    if b.parent is not None:
+                    deform_parent = _find_deform_parent(b)
+                    if deform_parent is not None:
                         parent_pose_inv = (
-                            obj.pose.bones[b.parent.name]
+                            obj.pose.bones[deform_parent.name]
                                .matrix.inverted_safe())
                         matrix = parent_pose_inv @ matrix
 
@@ -571,11 +627,18 @@ def export_camera(camera_obj):
     return output
 
 
-def correct_bones_as_vertex_groups(obj, bones):
+def correct_bones_as_vertex_groups(obj, bones, armature_obj=None):
+    deform_names = None
+    if armature_obj is not None:
+        deform_names = {b.name for b in armature_obj.data.bones
+                        if b.use_deform}
+
     corrected = []
     for vg in obj.vertex_groups:
-        if vg.name[-5:] != "_mesh" and vg.name != "Clothing":
-            corrected.append(vg.name)
+        name = vg.name
+        if name[-5:] != "_mesh" and name != "Clothing":
+            if deform_names is None or name in deform_names:
+                corrected.append(name)
     return corrected
 
 
@@ -659,6 +722,17 @@ def save(operator, context, **kwargs):
                 % camera_obj.name)
             return {'CANCELLED'}
 
+    non_deform_bones = []
+    if armature_obj is not None:
+        non_deform_bones = [b.name for b in armature_obj.data.bones
+                            if not b.use_deform]
+        if non_deform_bones:
+            operator.report(
+                {'INFO'},
+                "Skipping %d non-deform bone(s) "
+                "(IK targets, constraints, etc.): %s"
+                % (len(non_deform_bones), ', '.join(non_deform_bones)))
+
     if armature_obj is not None:
         try:
             armature_result = export_armature(
@@ -693,7 +767,8 @@ def save(operator, context, **kwargs):
         if armature_result is not None:
             armature_result['joints'].value = \
                 correct_bones_as_vertex_groups(
-                    mesh_obj, armature_result['joints'].value)
+                    mesh_obj, armature_result['joints'].value,
+                    armature_obj)
 
         if export_msh:
             try:
