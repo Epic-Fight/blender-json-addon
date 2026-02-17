@@ -7,7 +7,7 @@ A dedicated **Blender 2.8+** exporter built specifically for **Epic Fight–base
 This version of the exporter, supports **all versions above Blender 2.8**. 
 The exporter itself was tested on the following versions:
 
-* Blender (2.8) 🟩 Fully tested and working
+* Blender (2.8) 🟩 Fully tested & working
 * Blender (3.6) 🟩 Fully tested & working
 * Blender (4.1) 🟩 Fully tested & working
 * Blender (5.0) 🟩 Fully tested & working
@@ -62,6 +62,12 @@ For more information on how to use this and use Blender for Epic Fight developme
 ***
 
 ## 📝 Changelog
+
+### 2.0.1
+
+* Exclude any deform bones, like IKs, from being exported.
+* Added bone append logic
+* Matrix correction
 
 ### 2.0.0
 
