@@ -61,43 +61,5 @@ For more information on how to use this and use Blender for Epic Fight developme
 
 ***
 
-## 📝 Changelog
-
-### 2.0.1
-
-* Exclude any deform bones, like IKs, from being exported.
-* Added bone append logic
-* Matrix correction
-
-### 2.0.0
-
-* Ported 3.0.0 to Blender 2.8+
-  * Fixed Several issues
-  * Improved the exporter to work on versions above 3.6
-  * Added support for camera export & 'Attributes' exporting format
-
-### 1.0.3
-
-* Ported it to Blender 3.6 (Credits: [@box](https://github.com/box777555888))<br>  
-
-### 1.0.2
-
-* Added mesh separation by vertex groups
-  (Groups ending with `_mesh` are exported as distinct parts)
-
-### 1.0.1
-
-* Split "Export Model" into:
-
-  * Export Mesh
-  * Export Armature
-* Hidden joints are no longer exported
-
-### 1.0.0
-
-* Initial release for Blender 2.8
-
----
-
 ## 👥 Credits
 [@box](https://github.com/box777555888) - Blender 3.6 exporter
