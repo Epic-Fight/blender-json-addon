@@ -1,12 +1,13 @@
 ***
 
-# Epic Fight Animation & Model Exporter  
+# Epic Fight Blender - Exporter/Importer  
 
-A dedicated **Blender 2.8+** exporter built specifically for **Epic Fight–based Minecraft development**.
+A dedicated **Blender** addon built specifically for **Epic Fight–based Minecraft development**.
 
-This version of the exporter, supports **all versions above Blender 2.8**. 
+This version of the exporter, supports **all versions above Blender 2.79**. 
 The exporter itself was tested on the following versions:
 
+* Blender (2.79) 🟩 Fully tested & working
 * Blender (2.8) 🟩 Fully tested & working
 * Blender (3.6) 🟩 Fully tested & working
 * Blender (4.1) 🟩 Fully tested & working
@@ -16,7 +17,7 @@ This add-on enables exporting meshes, armatures, animations, and camera data int
 
 ***
 
-## 📦 Installation (Blender 2.8+)
+## 📦 Installation
 
 1. Download or clone the full source code.
 
